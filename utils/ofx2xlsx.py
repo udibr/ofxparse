@@ -32,10 +32,11 @@ parser.add_argument('--id-length', metavar='24', type=int, default=24,
                         'running numbers which change from download to download'
                         ' as a result you will have duplicate transactions'
                         ' unless you truncate the ID.')
+parser.add_argument('-m','--merge-memo', action='store_true', help='merge transactions which are different only in their memo')
+parser.add_argument('-c','--remove-account-prefix', type=int, help='How many characters to mask from the account name start')
 
 
 args = parser.parse_args()
-
 
 data = {}
 for fname in args.files:
@@ -53,13 +54,17 @@ print "Writing result to", args.output
 writer = pd.ExcelWriter(args.output)
 
 for account_number, df in data.iteritems():
+    if args.remove_account_prefix:
+        account_number = account_number[args.remove_account_prefix:]
+        df['id'] = df['id'].map(lambda x: x[args.remove_account_prefix:])
     # A transaction is identified using all `fields`
     # collapse all repeated transactions from the same file into one row
     # find the number of repeated transactions and
     # put it in samedayrepeat column
     df_count = df.groupby(fields+['fname']).size()
+    df_count.name = 'samedayrepeat'
     df_count = df_count.reset_index()
-    df_count.columns = list(df_count.columns[:-1]) + ['samedayrepeat']
+    # df_count.columns = list(df_count.columns[:-1]) + ['samedayrepeat']
 
     # two transactions from the same file are always different
     # but the same transaction can appear in multiple files if they overlap.
@@ -68,7 +73,12 @@ for account_number, df in data.iteritems():
     assert (df_size_fname_count == 1).all(), "Different samedayrepeat in different files"
 
     # take one file as an example
-    df1 = df_count.reset_index().groupby(fields+['samedayrepeat']).first()
+    if args.merge_memo:
+      df1 = df_count.reset_index().groupby([f for f in fields if f != 'memo'] + ['samedayrepeat'])
+      df1 = df1.memo.apply(lambda memos: ' '.join([m for m in memos if m]))
+      df1.name = 'memo'
+    else:
+      df1 = df_count.reset_index().groupby(fields+['samedayrepeat']).first()
     df1 = df1.reset_index()
 
     # expand back the collapsed transactions
@@ -80,7 +90,7 @@ for account_number, df in data.iteritems():
     # sort according to date
     df2 = df2.reset_index().set_index('date').sort_index()
     # filter dates
-    df2 = df2.ix[args.start:args.end]
+    df2 = df2.loc[args.start:args.end]
 
     #cleanup
     df2 = df2.reset_index()[fields]
